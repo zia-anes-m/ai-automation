@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Production Builds
+dist/
+*/dist/
+build/
+
+# Environment variables & API credentials
+.env
+.env.local
+.env.*.local
+*.env
+server/.env
+client/.env
+
+# Logs & System artifacts
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db
