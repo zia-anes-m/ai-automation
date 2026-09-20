@@ -109,7 +109,56 @@ app.post("/api/task/comparison", async (req, res) => {
     res.write(`data: ${JSON.stringify({ type: "error", message: err.message })}\n\n`);
   }
 
-  res.end();
+// Abort Task Endpoint
+app.post("/api/task/abort", (req, res) => {
+  const { sessionId } = req.body || {};
+  const session = sessions.get(sessionId);
+  if (session) {
+    session.abort();
+    return res.json({ status: "aborted", sessionId });
+  }
+  res.status(404).json({ error: "Active session not found" });
+});
+
+// Export Execution Summary
+app.get("/api/export/:sessionId", (req, res) => {
+  const { sessionId } = req.params;
+  const session = sessions.get(sessionId) || sessionHistory.find((s) => s.sessionId === sessionId);
+
+  if (!session) {
+    return res.status(404).send("Session not found");
+  }
+
+  const format = req.query.format || "markdown";
+  const outputs = session.outputs || {};
+
+  if (format === "json") {
+    res.setHeader("Content-Disposition", `attachment; filename="agent-sync-${sessionId}.json"`);
+    res.setHeader("Content-Type", "application/json");
+    return res.json(session);
+  }
+
+  let md = `# AGENT-SYNC Multi-Agent Execution Plan\n\n`;
+  md += `**Task:** ${session.taskPrompt}\n`;
+  md += `**Generated:** ${new Date().toISOString()}\n\n`;
+  md += `---\n\n`;
+
+  if (outputs.synthesizer) {
+    md += `## Final Master Consensus Plan (Synthesizer Agent)\n\n${outputs.synthesizer.content}\n\n---\n\n`;
+  }
+  if (outputs.planner) {
+    md += `## Strategic Breakdown (Planner Agent)\n\n${outputs.planner.content}\n\n---\n\n`;
+  }
+  if (outputs.executor) {
+    md += `## Technical Architecture (Executor Agent)\n\n${outputs.executor.content}\n\n---\n\n`;
+  }
+  if (outputs.critic) {
+    md += `## Adversarial Risk Review (Critic Agent)\n\n${outputs.critic.content}\n\n---\n\n`;
+  }
+
+  res.setHeader("Content-Disposition", `attachment; filename="agent-sync-plan-${sessionId}.md"`);
+  res.setHeader("Content-Type", "text/markdown");
+  res.send(md);
 });
 
 export default app;
