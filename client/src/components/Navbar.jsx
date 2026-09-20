@@ -1,16 +1,16 @@
 import React from 'react';
 import { 
   Sparkles, 
-  Cpu, 
-  Activity, 
   Layers, 
   GitCompare, 
   FileText, 
   History, 
   Settings, 
   Download,
-  Wifi,
-  WifiOff
+  Activity,
+  Terminal,
+  Compass,
+  Cpu
 } from 'lucide-react';
 
 export default function Navbar({ 
@@ -23,107 +23,108 @@ export default function Navbar({
   onExport 
 }) {
   return (
-    <header className="sticky top-0 z-40 w-full border-b border-white/10 bg-cyber-950/80 backdrop-blur-xl">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+    <header className="sticky top-0 z-40 w-full border-b border-white/[0.07] bg-obsidian-950/80 backdrop-blur-xl">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-15 flex items-center justify-between">
         
-        {/* Brand Logo & Tag */}
-        <div className="flex items-center gap-3">
-          <div className="relative flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-tr from-purple-600 via-blue-500 to-emerald-400 p-[1.5px] shadow-lg shadow-purple-500/20">
-            <div className="w-full h-full bg-cyber-900 rounded-[10px] flex items-center justify-center">
-              <Cpu className="w-5 h-5 text-purple-400 animate-pulse" />
-            </div>
+        {/* Brand & Studio Status */}
+        <div className="flex items-center gap-3.5">
+          <div className="relative flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 via-indigo-600 to-purple-600 text-white shadow-sm shadow-indigo-500/25 border border-white/20">
+            <Cpu className="w-4 h-4" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-extrabold text-lg tracking-wider bg-gradient-to-r from-blue-400 via-purple-300 to-emerald-400 bg-clip-text text-transparent">
-                AGENT-SYNC
+              <span className="font-bold text-sm tracking-tight text-white font-mono">
+                AGENT<span className="text-indigo-400">SYNC</span>
               </span>
-              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-300 border border-purple-500/30 uppercase tracking-widest">
-                Orion 1.0
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/[0.06] text-slate-300 border border-white/[0.08]">
+                v2.4
               </span>
             </div>
-            <p className="text-xs text-slate-400 hidden sm:block">
-              Multi-Agent Collaborative Intelligence Engine
+            <p className="text-[11px] text-slate-400 font-normal hidden sm:block">
+              Autonomous 4-Agent Orchestration Studio
             </p>
           </div>
         </div>
 
-        {/* Navigation Tabs */}
-        <div className="hidden md:flex items-center gap-1 bg-cyber-900/90 p-1 rounded-xl border border-white/5">
+        {/* Studio View Navigation (Segmented Switcher) */}
+        <nav className="flex items-center p-1 rounded-xl bg-obsidian-900 border border-white/[0.06]">
           <button
             onClick={() => setActiveTab('pipeline')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 ${
               activeTab === 'pipeline'
-                ? 'bg-purple-600/30 text-purple-300 border border-purple-500/40 shadow-sm'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                ? 'bg-obsidian-800 text-white shadow-sm border border-white/[0.1]'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.03]'
             }`}
           >
-            <Layers className="w-3.5 h-3.5" />
-            Live 4-Agent Pipeline
+            <Layers className="w-3.5 h-3.5 text-indigo-400" />
+            <span>Deliberation Grid</span>
           </button>
 
           <button
             onClick={() => setActiveTab('comparison')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 ${
               activeTab === 'comparison'
-                ? 'bg-blue-600/30 text-blue-300 border border-blue-500/40 shadow-sm'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                ? 'bg-obsidian-800 text-white shadow-sm border border-white/[0.1]'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.03]'
             }`}
           >
-            <GitCompare className="w-3.5 h-3.5" />
-            Single vs Multi Comparison
+            <GitCompare className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Empirical Benchmark</span>
           </button>
 
           <button
             onClick={() => setActiveTab('plan')}
             disabled={!hasPlan}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 ${
               !hasPlan 
                 ? 'opacity-40 cursor-not-allowed text-slate-500' 
                 : activeTab === 'plan'
-                  ? 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                  ? 'bg-obsidian-800 text-white shadow-sm border border-white/[0.1]'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.03]'
             }`}
           >
-            <FileText className="w-3.5 h-3.5" />
-            Master Blueprint
+            <FileText className="w-3.5 h-3.5 text-violet-400" />
+            <span>Consensus Blueprint</span>
+            {hasPlan && (
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            )}
           </button>
-        </div>
+        </nav>
 
-        {/* Right Tools & Indicators */}
-        <div className="flex items-center gap-2 sm:gap-3">
-          {/* Connection Status Indicator */}
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-cyber-900 border border-white/5 text-xs">
+        {/* Global Toolbar */}
+        <div className="flex items-center gap-2">
+          {/* Connection Status Badge */}
+          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-obsidian-900 border border-white/[0.06] text-[11px] font-mono">
             {isConnected ? (
               <>
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                <span className="text-[11px] text-emerald-400 font-medium hidden sm:inline">WS Live</span>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-sm shadow-emerald-400/50" />
+                <span className="text-slate-300">Live Stream</span>
               </>
             ) : (
               <>
-                <span className="w-2 h-2 rounded-full bg-rose-500" />
-                <span className="text-[11px] text-rose-400 font-medium hidden sm:inline">Offline</span>
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                <span className="text-rose-400">Offline</span>
               </>
             )}
           </div>
 
-          {/* Export Button */}
+          {/* Export Plan Quick Button */}
           {hasPlan && (
             <button
               onClick={onExport}
-              title="Export Master Plan to Markdown"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-xs font-semibold hover:bg-emerald-500/20 transition-all"
+              title="Export Consensus Blueprint (Markdown)"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 text-xs font-medium hover:bg-indigo-500/20 transition-all"
             >
               <Download className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Export Plan</span>
+              <span className="hidden md:inline">Export</span>
             </button>
           )}
 
           {/* History Button */}
           <button
             onClick={onOpenHistory}
-            title="View Past Deliberation Runs"
-            className="p-2 rounded-lg bg-cyber-900 border border-white/10 text-slate-300 hover:text-white hover:bg-white/5 transition-all"
+            title="Deliberation History"
+            className="p-1.5 rounded-lg bg-obsidian-900 border border-white/[0.08] text-slate-300 hover:text-white hover:bg-white/[0.05] transition-all"
           >
             <History className="w-4 h-4" />
           </button>
@@ -131,8 +132,8 @@ export default function Navbar({
           {/* Settings Button */}
           <button
             onClick={onOpenSettings}
-            title="Configure LLM & API Keys"
-            className="p-2 rounded-lg bg-cyber-900 border border-white/10 text-slate-300 hover:text-white hover:bg-white/5 transition-all"
+            title="Engine Settings & API Keys"
+            className="p-1.5 rounded-lg bg-obsidian-900 border border-white/[0.08] text-slate-300 hover:text-white hover:bg-white/[0.05] transition-all"
           >
             <Settings className="w-4 h-4" />
           </button>

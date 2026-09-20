@@ -13,42 +13,38 @@ const DEFAULT_AGENTS = {
   planner: {
     id: "planner",
     name: "Planner Agent",
-    role: "Strategic Task Decomposition",
-    personality: "Organized, Process-Oriented",
-    avatar: "🧭",
-    color: "#3b82f6",
-    accentBg: "rgba(59, 130, 246, 0.12)",
-    accentBorder: "rgba(59, 130, 246, 0.35)",
+    role: "Task Decomposition & Work Breakdown",
+    personality: "Strategic, Structured, Analytical",
+    color: "#6366f1",
+    accentBg: "rgba(99, 102, 241, 0.08)",
+    accentBorder: "rgba(99, 102, 241, 0.22)",
   },
   executor: {
     id: "executor",
     name: "Executor Agent",
-    role: "Technical Implementation Specialist",
-    personality: "Detail-Oriented, Pragmatic",
-    avatar: "⚙️",
-    color: "#10b981",
-    accentBg: "rgba(16, 185, 129, 0.12)",
-    accentBorder: "rgba(16, 185, 129, 0.35)",
+    role: "Technical Implementation & System Architecture",
+    personality: "Practical, Concrete, Code-Ready",
+    color: "#06b6d4",
+    accentBg: "rgba(6, 182, 212, 0.08)",
+    accentBorder: "rgba(6, 182, 212, 0.22)",
   },
   critic: {
     id: "critic",
     name: "Critic Agent",
-    role: "Risk Identification & Red-Team",
-    personality: "Skeptical, Thorough, Safety-Conscious",
-    avatar: "🛡️",
+    role: "Adversarial Risk Audit & Vulnerability Detection",
+    personality: "Skeptical, Exhaustive, Security-Focused",
     color: "#f43f5e",
-    accentBg: "rgba(244, 63, 94, 0.12)",
-    accentBorder: "rgba(244, 63, 94, 0.35)",
+    accentBg: "rgba(244, 63, 94, 0.08)",
+    accentBorder: "rgba(244, 63, 94, 0.22)",
   },
   synthesizer: {
     id: "synthesizer",
     name: "Synthesizer Agent",
-    role: "Consensus Builder & Final Plan Authority",
-    personality: "Diplomatic, Decisive, Unified Orchestrator",
-    avatar: "🔮",
-    color: "#a855f7",
-    accentBg: "rgba(168, 85, 247, 0.12)",
-    accentBorder: "rgba(168, 85, 247, 0.35)",
+    role: "Consensus Authority & Final Blueprint Assembly",
+    personality: "Harmonizing, Authoritative, Unified",
+    color: "#8b5cf6",
+    accentBg: "rgba(139, 92, 246, 0.08)",
+    accentBorder: "rgba(139, 92, 246, 0.22)",
   }
 };
 
@@ -100,7 +96,7 @@ export default function App() {
           setTaskPrompt(data.scenarios[0].prompt);
         }
       })
-      .catch((err) => console.log('Using local fallback scenarios', err));
+      .catch((err) => console.log('Using fallback local scenario dataset', err));
 
     fetch('/api/history')
       .then((res) => res.json())
@@ -147,12 +143,13 @@ export default function App() {
           } else if (msg.type === 'session_complete') {
             setIsRunning(false);
             setCurrentAgent(null);
-            // Trigger celebratory consensus confetti!
+            // Confetti upon consensus
             try {
               confetti({
-                particleCount: 80,
-                spread: 70,
-                origin: { y: 0.6 }
+                particleCount: 60,
+                spread: 60,
+                origin: { y: 0.65 },
+                colors: ['#6366f1', '#06b6d4', '#8b5cf6', '#10b981']
               });
             } catch (e) {}
             // Update history
@@ -242,16 +239,16 @@ export default function App() {
 
   const handleExportPlan = () => {
     if (!outputs.synthesizer) return;
-    const planText = `# AGENT-SYNC Master Consensus Plan\n\nTask: ${taskPrompt}\n\n${outputs.synthesizer.content}\n\n---\n\n` +
-      `## Planner Breakdown\n${outputs.planner?.content || ''}\n\n---\n\n` +
-      `## Executor Architecture\n${outputs.executor?.content || ''}\n\n---\n\n` +
-      `## Critic Adversarial Review\n${outputs.critic?.content || ''}`;
+    const planText = `# AGENT-SYNC Master Consensus Blueprint\n\n**Mission Objective:** ${taskPrompt}\n\n${outputs.synthesizer.content}\n\n---\n\n` +
+      `## 1. Planner Agent Breakdown\n${outputs.planner?.content || ''}\n\n---\n\n` +
+      `## 2. Executor Agent Architecture\n${outputs.executor?.content || ''}\n\n---\n\n` +
+      `## 3. Critic Adversarial Review\n${outputs.critic?.content || ''}`;
 
     const blob = new Blob([planText], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `agent-sync-consensus-${Date.now()}.md`;
+    a.download = `agentsync-blueprint-${Date.now()}.md`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -264,10 +261,13 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-cyber-950 text-slate-100 flex flex-col justify-between">
+    <div className="min-h-screen bg-obsidian-950 text-slate-100 flex flex-col justify-between bg-grid-pattern relative">
       
-      {/* Navigation */}
-      <div>
+      {/* Background radial ambient illumination */}
+      <div className="fixed inset-0 pointer-events-none bg-[radial-gradient(ellipse_80%_60%_at_50%_-20%,rgba(99,102,241,0.12),rgba(255,255,255,0))]" />
+
+      <div className="relative z-10">
+        {/* Navigation */}
         <Navbar
           activeTab={activeTab}
           setActiveTab={setActiveTab}
@@ -278,7 +278,7 @@ export default function App() {
           onExport={handleExportPlan}
         />
 
-        {/* Task Trigger Bar */}
+        {/* Studio Task Orchestration Deck */}
         <TaskInput
           scenarios={scenarios}
           selectedScenario={selectedScenario}
@@ -292,17 +292,17 @@ export default function App() {
           setProvider={setProvider}
         />
 
-        {/* Real-Time Agent Dataflow Visualization */}
+        {/* Real-Time Agent Pipeline Telemetry */}
         <AgentPipelineFlow
           currentAgent={currentAgent}
           outputs={outputs}
           isRunning={isRunning}
         />
 
-        {/* Tab Viewport */}
+        {/* Studio Viewport Tabs */}
         {activeTab === 'pipeline' && (
-          <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-12">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+          <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-14">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
               {['planner', 'executor', 'critic', 'synthesizer'].map((agentKey) => (
                 <AgentCard
                   key={agentKey}
@@ -336,11 +336,11 @@ export default function App() {
         )}
       </div>
 
-      {/* Footer */}
-      <footer className="w-full border-t border-white/5 py-4 px-6 text-center text-xs text-slate-500 bg-cyber-950/90">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
-          <span>AGENT-SYNC — Autonomous Multi-Agent AI & Edge Inference Architecture</span>
-          <span className="font-mono text-[11px] text-purple-400">Orion 1.0 Hackathon Edition • Win Probability: 85%+</span>
+      {/* Enterprise Studio Footer */}
+      <footer className="relative z-10 w-full border-t border-white/[0.06] py-4 px-6 text-xs text-slate-500 bg-obsidian-950/90 backdrop-blur-md">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 font-mono text-[11px]">
+          <span className="text-slate-400">AGENT-SYNC Studio • 4-Agent Autonomous Deliberation Protocol</span>
+          <span className="text-slate-500">Structured Message Passing • Full Reasoning Transparency</span>
         </div>
       </footer>
 
