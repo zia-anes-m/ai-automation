@@ -109,6 +109,9 @@ app.post("/api/task/comparison", async (req, res) => {
     res.write(`data: ${JSON.stringify({ type: "error", message: err.message })}\n\n`);
   }
 
+  res.end();
+});
+
 // Abort Task Endpoint
 app.post("/api/task/abort", (req, res) => {
   const { sessionId } = req.body || {};
