@@ -15,7 +15,9 @@ app.use(express.json());
 const sessions = new Map();
 const sessionHistory = [];
 
-app.get("/api/health", (req, res) => {
+const router = express.Router();
+
+router.get("/health", (req, res) => {
   res.json({
     status: "online",
     service: "AGENT-SYNC Multi-Agent Platform (Vercel Serverless Runtime)",
@@ -24,19 +26,19 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-app.get("/api/scenarios", (req, res) => {
+router.get("/scenarios", (req, res) => {
   res.json({ scenarios: DEMO_SCENARIOS });
 });
 
-app.get("/api/agents", (req, res) => {
+router.get("/agents", (req, res) => {
   res.json({ agents: AGENT_CONFIGS });
 });
 
-app.get("/api/history", (req, res) => {
+router.get("/history", (req, res) => {
   res.json({ history: sessionHistory });
 });
 
-app.get("/api/session/:id", (req, res) => {
+router.get("/session/:id", (req, res) => {
   const session = sessions.get(req.params.id);
   const historic = sessionHistory.find((s) => s.sessionId === req.params.id);
   if (session) {
@@ -49,7 +51,7 @@ app.get("/api/session/:id", (req, res) => {
 });
 
 // SSE Streaming Execution Endpoint
-app.post("/api/task/start", async (req, res) => {
+router.post("/task/start", async (req, res) => {
   const { taskPrompt, provider, apiKey } = req.body || {};
   const sessionId = req.body?.sessionId || `session_${Date.now()}`;
 
@@ -84,7 +86,7 @@ app.post("/api/task/start", async (req, res) => {
 });
 
 // SSE Streaming Comparison Endpoint
-app.post("/api/task/comparison", async (req, res) => {
+router.post("/task/comparison", async (req, res) => {
   const { taskPrompt, provider, apiKey } = req.body || {};
   const sessionId = req.body?.sessionId || `session_${Date.now()}`;
 
@@ -113,7 +115,7 @@ app.post("/api/task/comparison", async (req, res) => {
 });
 
 // Abort Task Endpoint
-app.post("/api/task/abort", (req, res) => {
+router.post("/task/abort", (req, res) => {
   const { sessionId } = req.body || {};
   const session = sessions.get(sessionId);
   if (session) {
@@ -124,7 +126,7 @@ app.post("/api/task/abort", (req, res) => {
 });
 
 // Export Execution Summary
-app.get("/api/export/:sessionId", (req, res) => {
+router.get("/export/:sessionId", (req, res) => {
   const { sessionId } = req.params;
   const session = sessions.get(sessionId) || sessionHistory.find((s) => s.sessionId === sessionId);
 
@@ -163,5 +165,9 @@ app.get("/api/export/:sessionId", (req, res) => {
   res.setHeader("Content-Type", "text/markdown");
   res.send(md);
 });
+
+// Mount router on both /api and root /
+app.use("/api", router);
+app.use("/", router);
 
 export default app;
