@@ -10,7 +10,7 @@ import HistoryModal from './components/HistoryModal';
 import SettingsModal from './components/SettingsModal';
 import { getApiUrl, getWsUrl } from './config';
 import { DEFAULT_SCENARIOS } from './data/defaultScenarios';
-import { AlertCircle, RefreshCw } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
 
 const DEFAULT_AGENTS = {
   planner: {
@@ -67,8 +67,9 @@ export default function App() {
     }
   });
 
-  // Connection State: 'connecting' | 'connected' | 'disconnected'
+  // Connection State: 'connected' | 'connecting' | 'disconnected'
   const [connectionState, setConnectionState] = useState('connecting');
+  const [isHttpLive, setIsHttpLive] = useState(false);
   const [connectionErrorMsg, setConnectionErrorMsg] = useState(null);
 
   const [isRunning, setIsRunning] = useState(false);
@@ -90,18 +91,54 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const wsRef = useRef(null);
-  const reconnectTimeoutRef = useRef(null);
   const retryCountRef = useRef(0);
+  const abortControllerRef = useRef(null);
 
   const apiUrl = getApiUrl();
   const wsUrl = getWsUrl();
 
-  // Load scenarios and agent configs from backend
+  // Handle inbound agent event (unified across WS and SSE)
+  const handleAgentEvent = useCallback((msg) => {
+    if (!msg) return;
+
+    if (msg.type === 'agent_start') {
+      setCurrentAgent(msg.agentId);
+      setStreamingChunks((prev) => ({ ...prev, [msg.agentId]: '' }));
+    } else if (msg.type === 'agent_chunk') {
+      setStreamingChunks((prev) => ({ ...prev, [msg.agentId]: msg.accumulated }));
+    } else if (msg.type === 'agent_complete') {
+      setOutputs((prev) => ({ ...prev, [msg.agentId]: msg.message }));
+      setStreamingChunks((prev) => ({ ...prev, [msg.agentId]: '' }));
+    } else if (msg.type === 'session_complete') {
+      setIsRunning(false);
+      setCurrentAgent(null);
+      try {
+        confetti({
+          particleCount: 60,
+          spread: 60,
+          origin: { y: 0.65 },
+          colors: ['#6366f1', '#06b6d4', '#8b5cf6', '#10b981']
+        });
+      } catch (e) {}
+      if (msg.summary) {
+        setHistoryList((prev) => [msg.summary, ...prev.filter((h) => h.sessionId !== msg.summary.sessionId)]);
+      }
+    } else if (msg.type === 'single_agent_chunk') {
+      setSingleOutputChunk(msg.accumulated);
+    } else if (msg.type === 'comparison_complete') {
+      setIsRunningComparison(false);
+      setComparisonData(msg.comparison);
+    } else if (msg.type === 'error') {
+      setConnectionErrorMsg(`Server Error: ${msg.message}`);
+      setIsRunning(false);
+      setIsRunningComparison(false);
+    }
+  }, []);
+
+  // Load scenarios and agent configs from backend once on mount
   useEffect(() => {
     const fetchScenariosUrl = `${apiUrl}/api/scenarios`;
     const fetchHistoryUrl = `${apiUrl}/api/history`;
-
-    console.log(`[AGENT-SYNC] Fetching scenarios from ${fetchScenariosUrl}`);
 
     fetch(fetchScenariosUrl)
       .then((res) => {
@@ -109,15 +146,15 @@ export default function App() {
         return res.json();
       })
       .then((data) => {
+        setIsHttpLive(true);
         if (data.scenarios && data.scenarios.length > 0) {
-          console.log(`[AGENT-SYNC] Loaded ${data.scenarios.length} scenarios from backend`);
           setScenarios(data.scenarios);
           setSelectedScenario(data.scenarios[0]);
           setTaskPrompt(data.scenarios[0].prompt);
         }
       })
-      .catch((err) => {
-        console.warn('[AGENT-SYNC] Backend scenarios API unavailable, initialized with default benchmark scenarios:', err.message);
+      .catch(() => {
+        setIsHttpLive(false);
       });
 
     fetch(fetchHistoryUrl)
@@ -128,127 +165,133 @@ export default function App() {
       .then((data) => {
         if (data.history) setHistoryList(data.history);
       })
-      .catch((err) => {
-        console.warn('[AGENT-SYNC] History API unavailable:', err.message);
-      });
+      .catch(() => {});
   }, [apiUrl]);
 
-  // WebSocket Connection Management
-  const connectWebSocket = useCallback(() => {
-    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
-      return;
-    }
-
-    setConnectionState('connecting');
-    console.log(`[AGENT-SYNC WS] Connecting to ${wsUrl}`);
-
-    try {
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        console.log(`[AGENT-SYNC WS] Successfully connected to ${wsUrl}`);
-        setConnectionState('connected');
-        setConnectionErrorMsg(null);
-        retryCountRef.current = 0;
-      };
-
-      ws.onclose = (event) => {
-        console.warn(`[AGENT-SYNC WS] Connection closed (code: ${event.code}, reason: "${event.reason || 'None'}").`);
-        setConnectionState('disconnected');
-        wsRef.current = null;
-
-        // Schedule auto-reconnect with exponential backoff (min 2.5s, max 15s)
-        const delay = Math.min(15000, Math.pow(1.5, retryCountRef.current) * 2500);
-        retryCountRef.current += 1;
-        
-        if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = setTimeout(() => {
-          connectWebSocket();
-        }, delay);
-      };
-
-      ws.onerror = (error) => {
-        console.error(`[AGENT-SYNC WS] Error connecting to ${wsUrl}:`, error);
-        setConnectionState('disconnected');
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-
-          if (msg.type === 'agent_start') {
-            setCurrentAgent(msg.agentId);
-            setStreamingChunks((prev) => ({ ...prev, [msg.agentId]: '' }));
-          } else if (msg.type === 'agent_chunk') {
-            setStreamingChunks((prev) => ({ ...prev, [msg.agentId]: msg.accumulated }));
-          } else if (msg.type === 'agent_complete') {
-            setOutputs((prev) => ({ ...prev, [msg.agentId]: msg.message }));
-            setStreamingChunks((prev) => ({ ...prev, [msg.agentId]: '' }));
-          } else if (msg.type === 'session_complete') {
-            setIsRunning(false);
-            setCurrentAgent(null);
-            // Confetti upon consensus
-            try {
-              confetti({
-                particleCount: 60,
-                spread: 60,
-                origin: { y: 0.65 },
-                colors: ['#6366f1', '#06b6d4', '#8b5cf6', '#10b981']
-              });
-            } catch (e) {}
-            // Update history
-            if (msg.summary) {
-              setHistoryList((prev) => [msg.summary, ...prev.filter((h) => h.sessionId !== msg.summary.sessionId)]);
-            }
-          } else if (msg.type === 'single_agent_chunk') {
-            setSingleOutputChunk(msg.accumulated);
-          } else if (msg.type === 'comparison_complete') {
-            setIsRunningComparison(false);
-            setComparisonData(msg.comparison);
-          } else if (msg.type === 'error') {
-            console.error('[AGENT-SYNC WS] Server error payload:', msg.message);
-            setConnectionErrorMsg(`Execution Error: ${msg.message}`);
-            setIsRunning(false);
-            setIsRunningComparison(false);
-          }
-        } catch (e) {
-          console.error('[AGENT-SYNC WS] Error parsing message payload:', e);
-        }
-      };
-    } catch (err) {
-      console.error('[AGENT-SYNC WS] Failed to initialize WebSocket:', err);
-      setConnectionState('disconnected');
-    }
-  }, [wsUrl]);
-
+  // Robust WebSocket Connection Lifecycle (Single connection, no redundant reconnection)
   useEffect(() => {
-    connectWebSocket();
+    let isMounted = true;
+    let socket = null;
+    let reconnectTimeout = null;
+
+    function connect() {
+      if (!isMounted) return;
+      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+        return;
+      }
+
+      setConnectionState('connecting');
+
+      try {
+        const ws = new WebSocket(wsUrl);
+        socket = ws;
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+          if (!isMounted) return ws.close();
+          setConnectionState('connected');
+          setConnectionErrorMsg(null);
+          retryCountRef.current = 0;
+        };
+
+        ws.onclose = () => {
+          if (!isMounted) return;
+          setConnectionState('disconnected');
+          wsRef.current = null;
+
+          // Controlled reconnect backoff (max 5 retries, 2-10s interval)
+          if (retryCountRef.current < 5) {
+            const delay = Math.min(10000, Math.pow(1.5, retryCountRef.current) * 2000);
+            retryCountRef.current += 1;
+
+            if (reconnectTimeout) clearTimeout(reconnectTimeout);
+            reconnectTimeout = setTimeout(() => {
+              if (isMounted) connect();
+            }, delay);
+          }
+        };
+
+        ws.onerror = () => {
+          if (!isMounted) return;
+          setConnectionState('disconnected');
+        };
+
+        ws.onmessage = (event) => {
+          if (!isMounted) return;
+          try {
+            const msg = JSON.parse(event.data);
+            handleAgentEvent(msg);
+          } catch (e) {
+            console.error('[AGENT-SYNC WS] Parse error:', e);
+          }
+        };
+      } catch (err) {
+        if (isMounted) setConnectionState('disconnected');
+      }
+    }
+
+    connect();
 
     return () => {
-      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-      if (wsRef.current) wsRef.current.close();
+      isMounted = false;
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (socket) {
+        socket.onopen = null;
+        socket.onclose = null;
+        socket.onerror = null;
+        socket.onmessage = null;
+        if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          socket.close();
+        }
+      }
+      wsRef.current = null;
     };
-  }, [connectWebSocket]);
+  }, [wsUrl, handleAgentEvent]);
 
-  const handleSelectScenario = (sc) => {
+  // Determine effective connection state for UI
+  const effectiveConnectionState = connectionState === 'connected' ? 'connected' : (isHttpLive ? 'connected' : connectionState);
+
+  const handleSelectScenario = useCallback((sc) => {
     setSelectedScenario(sc);
     setTaskPrompt(sc.prompt);
-  };
+  }, []);
 
-  const handleSaveApiKeys = (newKeys) => {
+  const handleSaveApiKeys = useCallback((newKeys) => {
     setApiKeys(newKeys);
     localStorage.setItem('agentsync_keys', JSON.stringify(newKeys));
+  }, []);
+
+  // Helper: Read SSE Stream
+  const readSSEStream = async (response) => {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n\n');
+      buffer = lines.pop(); // keep remainder
+
+      for (const block of lines) {
+        const line = block.trim();
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            handleAgentEvent(data);
+          } catch (e) {
+            console.error('SSE parse error:', e);
+          }
+        }
+      }
+    }
   };
 
-  // Start Pipeline Execution
-  const handleStartExecution = () => {
+  // Start Pipeline Execution (Strictly single run per click)
+  const handleStartExecution = useCallback(async () => {
     if (!taskPrompt.trim() || isRunning) return;
-
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      setConnectionErrorMsg(`Backend server is currently offline or unreachable at ${wsUrl}. Please ensure your backend is deployed and VITE_WS_URL is set.`);
-      return;
-    }
 
     setConnectionErrorMsg(null);
     const newSessionId = `session_${Date.now()}`;
@@ -262,60 +305,111 @@ export default function App() {
 
     const activeKey = provider === 'anthropic' ? apiKeys.anthropic : provider === 'gemini' ? apiKeys.gemini : apiKeys.openai;
 
-    try {
-      wsRef.current.send(JSON.stringify({
-        type: 'start_task',
-        sessionId: newSessionId,
-        taskPrompt,
-        provider,
-        apiKey: activeKey
-      }));
-    } catch (err) {
-      console.error('[AGENT-SYNC] Failed to send start_task message:', err);
-      setIsRunning(false);
-      setConnectionErrorMsg('Failed to send task to backend.');
+    // Primary: Real-time WebSocket
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      try {
+        wsRef.current.send(JSON.stringify({
+          type: 'start_task',
+          sessionId: newSessionId,
+          taskPrompt,
+          provider,
+          apiKey: activeKey
+        }));
+        return;
+      } catch (err) {
+        console.warn('WS send failed, falling back to SSE:', err);
+      }
     }
-  };
 
-  const handleAbortExecution = () => {
+    // Resilient Fallback: HTTP Server-Sent Events (SSE) Stream
+    try {
+      abortControllerRef.current = new AbortController();
+      const res = await fetch(`${apiUrl}/api/task/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: newSessionId,
+          taskPrompt,
+          provider,
+          apiKey: activeKey
+        }),
+        signal: abortControllerRef.current.signal
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await readSSEStream(res);
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        console.error('Task execution error:', err);
+        setConnectionErrorMsg(`Execution error: ${err.message}`);
+      }
+      setIsRunning(false);
+    }
+  }, [taskPrompt, isRunning, provider, apiKeys, apiUrl]);
+
+  const handleAbortExecution = useCallback(() => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && currentSessionId) {
       wsRef.current.send(JSON.stringify({
         type: 'abort_task',
         sessionId: currentSessionId
       }));
     }
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
     setIsRunning(false);
     setCurrentAgent(null);
-  };
+  }, [currentSessionId]);
 
-  const handleRunComparison = () => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      setConnectionErrorMsg(`Backend server is currently offline or unreachable at ${wsUrl}.`);
-      return;
-    }
+  const handleRunComparison = useCallback(async () => {
+    if (isRunningComparison) return;
 
     setConnectionErrorMsg(null);
     setIsRunningComparison(true);
     setSingleOutputChunk('');
 
     const activeKey = provider === 'anthropic' ? apiKeys.anthropic : provider === 'gemini' ? apiKeys.gemini : apiKeys.openai;
+    const cmpSessionId = currentSessionId || `session_${Date.now()}`;
 
-    try {
-      wsRef.current.send(JSON.stringify({
-        type: 'run_comparison',
-        sessionId: currentSessionId || `session_${Date.now()}`,
-        taskPrompt,
-        provider,
-        apiKey: activeKey
-      }));
-    } catch (err) {
-      console.error('[AGENT-SYNC] Failed to send run_comparison message:', err);
-      setIsRunningComparison(false);
-      setConnectionErrorMsg('Failed to run comparison on backend.');
+    // Primary: WebSocket
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      try {
+        wsRef.current.send(JSON.stringify({
+          type: 'run_comparison',
+          sessionId: cmpSessionId,
+          taskPrompt,
+          provider,
+          apiKey: activeKey
+        }));
+        return;
+      } catch (err) {
+        console.warn('WS comparison failed, falling back to HTTP stream:', err);
+      }
     }
-  };
 
-  const handleExportPlan = () => {
+    // Fallback: HTTP SSE Stream
+    try {
+      const res = await fetch(`${apiUrl}/api/task/comparison`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: cmpSessionId,
+          taskPrompt,
+          provider,
+          apiKey: activeKey
+        })
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await readSSEStream(res);
+    } catch (err) {
+      console.error('Comparison error:', err);
+      setIsRunningComparison(false);
+      setConnectionErrorMsg('Failed to run comparison on server.');
+    }
+  }, [isRunningComparison, currentSessionId, taskPrompt, provider, apiKeys, apiUrl]);
+
+  const handleExportPlan = useCallback(() => {
     if (!outputs.synthesizer) return;
     const planText = `# AGENT-SYNC Master Consensus Blueprint\n\n**Mission Objective:** ${taskPrompt}\n\n${outputs.synthesizer.content}\n\n---\n\n` +
       `## 1. Planner Agent Breakdown\n${outputs.planner?.content || ''}\n\n---\n\n` +
@@ -329,14 +423,14 @@ export default function App() {
     a.download = `agentsync-blueprint-${Date.now()}.md`;
     a.click();
     URL.revokeObjectURL(url);
-  };
+  }, [outputs, taskPrompt]);
 
-  const handleLoadSession = (item) => {
+  const handleLoadSession = useCallback((item) => {
     setTaskPrompt(item.taskPrompt);
     setOutputs(item.outputs || {});
     setCurrentSessionId(item.sessionId);
     setActiveTab('plan');
-  };
+  }, []);
 
   return (
     <div className="min-h-screen bg-obsidian-950 text-slate-100 flex flex-col justify-between bg-grid-pattern relative">
@@ -349,7 +443,7 @@ export default function App() {
         <Navbar
           activeTab={activeTab}
           setActiveTab={setActiveTab}
-          connectionState={connectionState}
+          connectionState={effectiveConnectionState}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onOpenHistory={() => setIsHistoryOpen(true)}
           hasPlan={!!outputs.synthesizer}
@@ -365,13 +459,10 @@ export default function App() {
                 <span>{connectionErrorMsg}</span>
               </div>
               <button
-                onClick={() => {
-                  setConnectionErrorMsg(null);
-                  connectWebSocket();
-                }}
+                onClick={() => setConnectionErrorMsg(null)}
                 className="px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 font-medium text-[11px] flex items-center gap-1 transition-all flex-shrink-0"
               >
-                <RefreshCw className="w-3 h-3" /> Retry Connection
+                Dismiss
               </button>
             </div>
           </div>
@@ -439,7 +530,7 @@ export default function App() {
       <footer className="relative z-10 w-full border-t border-white/[0.06] py-4 px-6 text-xs text-slate-500 bg-obsidian-950/90 backdrop-blur-md">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 font-mono text-[11px]">
           <span className="text-slate-400">AGENT-SYNC Studio • 4-Agent Autonomous Deliberation Protocol</span>
-          <span className="text-slate-500">Structured Message Passing • Full Reasoning Transparency</span>
+          <span className="text-slate-500">Structured Message Passing • Unified Pipeline</span>
         </div>
       </footer>
 

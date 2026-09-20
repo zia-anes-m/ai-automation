@@ -1,6 +1,9 @@
 import express from "express";
 import http from "http";
-import { WebSocketServer, WebSocket } from "ws";
+import path from "path";
+import fs from "fs";
+import { fileURLToPath } from "url";
+import { WebSocketServer } from "ws";
 import cors from "cors";
 import dotenv from "dotenv";
 import { DEMO_SCENARIOS } from "./agents/scenarios.js";
@@ -9,69 +12,56 @@ import { OrchestrationSession } from "./agents/orchestrator.js";
 
 dotenv.config();
 
+// Global safety handlers so server process NEVER exits unexpectedly
+process.on("uncaughtException", (err) => {
+  console.error("[SERVER] Uncaught exception:", err.message);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[SERVER] Unhandled promise rejection:", reason);
+});
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const clientDistDir = path.resolve(__dirname, "../../client/dist");
+
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: "/ws" });
+
+// Direct WebSocket Server attached to HTTP server
+const wss = new WebSocketServer({ noServer: true });
 
 const PORT = process.env.PORT || 5000;
 
-// Dynamic CORS Configuration
-const allowedOrigins = process.env.CORS_ORIGIN
-  ? process.env.CORS_ORIGIN.split(",").map((s) => s.trim())
-  : [
-      "https://autonomous-ai-agents.vercel.app",
-      "http://localhost:5173",
-      "http://localhost:3000",
-      "http://localhost:5000"
-    ];
-
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      // Allow requests with no origin (e.g. mobile apps, curl, server-to-server)
-      if (!origin || allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        // Log rejected origins for diagnostic visibility
-        console.warn(`[CORS] Request from origin ${origin} accepted under permissive fallback.`);
-        callback(null, true);
-      }
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
-  })
-);
-
+// Permissive CORS for localhost & production
+app.use(cors({ origin: "*", credentials: true }));
 app.use(express.json());
 
 // In-memory session store
 const sessions = new Map();
 const sessionHistory = [];
+let activePipelineCount = 0;
 
-// Broadcast helper to WS clients interested in a session
+// Safe Broadcast helper: sends event to all connected clients interested in session
 function broadcastSessionEvent(sessionId, event) {
   const payload = JSON.stringify(event);
   wss.clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
+    if (client.readyState === 1) { // WebSocket.OPEN
       if (!client.activeSessionId || client.activeSessionId === sessionId) {
-        client.send(payload);
+        try {
+          client.send(payload);
+        } catch (err) {
+          // Socket closed during send — ignore safely
+        }
       }
     }
   });
 }
 
-// WebSocket connection handling & heartbeat
-wss.on("connection", (ws, req) => {
-  const clientIp = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
-  console.log(`[WS] New client connected from ${clientIp}`);
-
-  ws.isAlive = true;
+// WebSocket Connection Lifecycle
+wss.on("connection", (ws) => {
   ws.activeSessionId = null;
-
-  ws.on("pong", () => {
-    ws.isAlive = true;
-  });
+  console.log(`[WS] Client connected (Total active clients: ${wss.clients.size})`);
 
   ws.on("message", async (rawMessage) => {
     try {
@@ -79,11 +69,24 @@ wss.on("connection", (ws, req) => {
 
       if (data.type === "subscribe") {
         ws.activeSessionId = data.sessionId;
-        ws.send(JSON.stringify({ type: "subscribed", sessionId: data.sessionId }));
+        try {
+          ws.send(JSON.stringify({ type: "subscribed", sessionId: data.sessionId }));
+        } catch (e) {}
       } else if (data.type === "start_task") {
         const sessionId = data.sessionId || `session_${Date.now()}`;
         ws.activeSessionId = sessionId;
-        console.log(`[TASK] Initiating 4-Agent Pipeline for session: ${sessionId} (Engine: ${data.provider || 'simulation'})`);
+
+        console.log(`\n=============================================================`);
+        console.log(`[PIPELINE] Received request: sessionId=${sessionId}`);
+        console.log(`[PIPELINE] Task: "${(data.taskPrompt || "").substring(0, 70)}..."`);
+        console.log(`[PIPELINE] Engine: ${data.provider || "simulation"}`);
+        console.log(`=============================================================`);
+
+        // If an existing session for this sessionId is currently running, ignore duplicate
+        if (sessions.has(sessionId) && sessions.get(sessionId).isRunning) {
+          console.warn(`[PIPELINE] Session ${sessionId} is already running. Ignoring duplicate.`);
+          return;
+        }
 
         const session = new OrchestrationSession({
           sessionId,
@@ -93,21 +96,30 @@ wss.on("connection", (ws, req) => {
           emitEvent: (event) => broadcastSessionEvent(sessionId, event)
         });
 
+        session.isRunning = true;
         sessions.set(sessionId, session);
+        activePipelineCount++;
 
-        // Run multi-agent pipeline asynchronously
-        const summary = await session.runMultiAgentPipeline();
-        if (summary) {
-          sessionHistory.unshift(summary);
-          if (sessionHistory.length > 50) sessionHistory.pop();
+        try {
+          const summary = await session.runMultiAgentPipeline();
+          if (summary) {
+            sessionHistory.unshift(summary);
+            if (sessionHistory.length > 50) sessionHistory.pop();
+          }
+        } finally {
+          session.isRunning = false;
+          activePipelineCount = Math.max(0, activePipelineCount - 1);
+          console.log(`\n[PIPELINE] COMPLETE: sessionId=${sessionId}`);
+          console.log(`[PIPELINE] IDLE — Waiting for next user request.\n`);
         }
       } else if (data.type === "run_comparison") {
-        const sessionId = data.sessionId;
-        console.log(`[BENCHMARK] Running side-by-side comparison for session: ${sessionId}`);
+        const sessionId = data.sessionId || `cmp_${Date.now()}`;
+        console.log(`[BENCHMARK] Running comparison for session: ${sessionId}`);
+
         let session = sessions.get(sessionId);
         if (!session) {
           session = new OrchestrationSession({
-            sessionId: sessionId || `session_${Date.now()}`,
+            sessionId,
             taskPrompt: data.taskPrompt || "Test Task",
             provider: data.provider || "simulation",
             apiKey: data.apiKey || null,
@@ -115,71 +127,68 @@ wss.on("connection", (ws, req) => {
           });
           sessions.set(sessionId, session);
         }
+
         await session.runSingleAgentComparison();
+        console.log(`[BENCHMARK] Comparison complete for session: ${sessionId}`);
       } else if (data.type === "abort_task") {
-        console.log(`[TASK] Aborting session: ${data.sessionId}`);
+        console.log(`[PIPELINE] Abort requested for session: ${data.sessionId}`);
         const session = sessions.get(data.sessionId);
         if (session) {
           session.abort();
         }
       }
     } catch (err) {
-      console.error("[WS] Error processing client message:", err.message);
-      ws.send(JSON.stringify({ type: "error", message: err.message }));
+      console.error("[WS] Error handling client message:", err.message);
+      try {
+        ws.send(JSON.stringify({ type: "error", message: err.message }));
+      } catch (e) {}
     }
   });
 
-  ws.on("close", (code, reason) => {
-    console.log(`[WS] Client disconnected (code: ${code}, reason: "${reason.toString() || 'Normal closure'}")`);
+  ws.on("close", () => {
+    console.log(`[WS] Client disconnected (Remaining clients: ${wss.clients.size})`);
   });
 
   ws.on("error", (err) => {
-    console.error("[WS] Client connection error:", err.message);
+    console.error("[WS] Socket error:", err.message);
   });
 
-  // Initial welcome message
-  ws.send(JSON.stringify({ 
-    type: "connected", 
-    message: "AGENT-SYNC Multi-Agent Server Connected",
-    timestamp: new Date().toISOString()
-  }));
+  // Welcome handshake
+  try {
+    ws.send(JSON.stringify({ 
+      type: "connected", 
+      message: "AGENT-SYNC Multi-Agent Server Connected",
+      timestamp: new Date().toISOString()
+    }));
+  } catch (e) {}
 });
 
-// Periodic heartbeat to prevent cloud load balancer timeouts (every 30s)
-const interval = setInterval(() => {
-  wss.clients.forEach((ws) => {
-    if (ws.isAlive === false) return ws.terminate();
-    ws.isAlive = false;
-    ws.ping();
-  });
-}, 30000);
-
-wss.on("close", () => {
-  clearInterval(interval);
-});
-
-// REST API Endpoints
-app.get("/", (req, res) => {
-  res.json({
-    status: "online",
-    service: "AGENT-SYNC Multi-Agent Platform Server",
-    version: "2.4.0",
-    websocket: "/ws",
-    endpoints: {
-      health: "/api/health",
-      scenarios: "/api/scenarios",
-      agents: "/api/agents",
-      history: "/api/history"
+// Upgrade handler: Exclusively handle /ws
+server.on("upgrade", (request, socket, head) => {
+  try {
+    const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
+    if (url.pathname === "/ws") {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit("connection", ws, request);
+      });
+    } else {
+      socket.destroy();
     }
-  });
+  } catch (e) {
+    socket.destroy();
+  }
 });
 
+// -------------------------------------------------------------
+// REST API Endpoints
+// -------------------------------------------------------------
 app.get("/api/health", (req, res) => {
   res.json({
     status: "online",
     service: "AGENT-SYNC Multi-Agent Platform",
     timestamp: new Date().toISOString(),
     activeSessions: sessions.size,
+    activePipelines: activePipelineCount,
     connectedClients: wss.clients.size
   });
 });
@@ -208,7 +217,6 @@ app.get("/api/session/:id", (req, res) => {
   }
 });
 
-// Download/Export Endpoint
 app.get("/api/export/:sessionId", (req, res) => {
   const { sessionId } = req.params;
   const session = sessions.get(sessionId) || sessionHistory.find((s) => s.sessionId === sessionId);
@@ -226,7 +234,6 @@ app.get("/api/export/:sessionId", (req, res) => {
     return res.json(session);
   }
 
-  // Markdown Export
   let md = `# AGENT-SYNC Multi-Agent Execution Plan\n\n`;
   md += `**Task:** ${session.taskPrompt}\n`;
   md += `**Generated:** ${new Date().toISOString()}\n\n`;
@@ -250,8 +257,31 @@ app.get("/api/export/:sessionId", (req, res) => {
   res.send(md);
 });
 
+// -------------------------------------------------------------
+// Serve React Static Build (client/dist) with SPA fallback
+// -------------------------------------------------------------
+if (fs.existsSync(clientDistDir)) {
+  app.use(express.static(clientDistDir));
+
+  app.get("*", (req, res, next) => {
+    if (req.path.startsWith("/api") || req.path.startsWith("/ws")) {
+      return next();
+    }
+    res.sendFile(path.join(clientDistDir, "index.html"));
+  });
+} else {
+  app.get("/", (req, res) => {
+    res.send("AGENT-SYNC server running. Run 'npm run build' to build the client.");
+  });
+}
+
+// -------------------------------------------------------------
 // Start Server
+// -------------------------------------------------------------
 server.listen(PORT, () => {
-  console.log(`🚀 AGENT-SYNC Orchestration Server running on port ${PORT}`);
-  console.log(`📡 WebSocket endpoint live at ws://localhost:${PORT}/ws`);
+  console.log(`\n=============================================================`);
+  console.log(`🚀 AGENT-SYNC Server running on: http://localhost:${PORT}`);
+  console.log(`📡 WebSocket endpoint live at: ws://localhost:${PORT}/ws`);
+  console.log(`📁 Serving client from: ${clientDistDir}`);
+  console.log(`=============================================================\n`);
 });

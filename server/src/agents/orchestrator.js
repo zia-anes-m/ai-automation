@@ -11,14 +11,19 @@ export class OrchestrationSession {
     this.history = [];
     this.outputs = {};
     this.isAborted = false;
+    this.isRunning = false;
   }
 
   abort() {
     this.isAborted = true;
+    this.isRunning = false;
   }
 
   async runMultiAgentPipeline() {
     const startTime = Date.now();
+    this.isRunning = true;
+    this.isAborted = false;
+
     this.emitEvent({
       type: "session_start",
       sessionId: this.sessionId,
@@ -27,21 +32,25 @@ export class OrchestrationSession {
     });
 
     const pipeline = [
-      { id: "planner", round: 1 },
-      { id: "executor", round: 2 },
-      { id: "critic", round: 3 },
-      { id: "synthesizer", round: 4 }
+      { id: "planner", round: 1, name: "Planner Agent" },
+      { id: "executor", round: 2, name: "Executor Agent" },
+      { id: "critic", round: 3, name: "Critic Agent" },
+      { id: "synthesizer", round: 4, name: "Synthesizer Agent" }
     ];
 
     for (let i = 0; i < pipeline.length; i++) {
       if (this.isAborted) {
+        console.log(`[PIPELINE] Session ${this.sessionId} aborted by user.`);
         this.emitEvent({ type: "session_aborted", sessionId: this.sessionId });
+        this.isRunning = false;
         return null;
       }
 
       const step = pipeline[i];
       const agentId = step.id;
       const config = AGENT_CONFIGS[agentId];
+
+      console.log(`[PIPELINE] ${step.name} started (Round ${step.round}/4)`);
 
       this.emitEvent({
         type: "agent_start",
@@ -81,7 +90,10 @@ export class OrchestrationSession {
         }
       });
 
-      if (this.isAborted) return null;
+      if (this.isAborted) {
+        this.isRunning = false;
+        return null;
+      }
 
       const message = {
         ...result,
@@ -95,6 +107,8 @@ export class OrchestrationSession {
       this.outputs[agentId] = message;
       this.history.push(message);
 
+      console.log(`[PIPELINE] ${step.name} completed (Confidence: ${message.confidence || 90}%)`);
+
       this.emitEvent({
         type: "agent_complete",
         sessionId: this.sessionId,
@@ -104,7 +118,7 @@ export class OrchestrationSession {
       });
 
       // brief transition delay for visual delight
-      await new Promise((r) => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 150));
     }
 
     const durationSeconds = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -126,12 +140,15 @@ export class OrchestrationSession {
       completedAt: new Date().toISOString()
     };
 
+    console.log(`[PIPELINE] Consensus finalized in ${durationSeconds}s (Avg Confidence: ${avgConfidence}%, Risks: ${totalRisks})`);
+
     this.emitEvent({
       type: "session_complete",
       sessionId: this.sessionId,
       summary: sessionSummary
     });
 
+    this.isRunning = false;
     return sessionSummary;
   }
 

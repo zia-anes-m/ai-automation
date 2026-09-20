@@ -1,19 +1,21 @@
 /**
- * AGENT-SYNC Client Configuration & URL Resolution
+ * AGENT-SYNC Unified Configuration & URL Resolution
  * 
- * In Development (localhost):
- *   Vite dev proxy forwards `/api` to `http://localhost:5000` and `/ws` to `ws://localhost:5000`.
+ * In Unified Server Mode (Default):
+ *   Frontend and Backend share the same origin (http://localhost:5000).
+ *   API requests use relative paths ('/api/...')
+ *   WebSocket automatically connects to ws://<current-host>/ws or wss://<current-host>/ws.
  * 
- * In Production (Vercel):
- *   Frontend connects to public backend specified via `VITE_API_URL` and `VITE_WS_URL`.
+ * In Split Architecture (e.g. Vercel Frontend + External Backend):
+ *   VITE_API_URL and VITE_WS_URL can be provided to override endpoints.
  */
 
 export const getApiUrl = () => {
   const envApi = import.meta.env.VITE_API_URL;
   if (envApi && envApi.trim() !== '') {
-    return envApi.replace(/\/+$/, '');
+    return envApi.trim().replace(/\/+$/, '');
   }
-  // In development, empty string uses relative paths proxied by Vite
+  // Same-origin default
   return '';
 };
 
@@ -23,7 +25,7 @@ export const getWsUrl = () => {
     return envWs.trim();
   }
 
-  // If VITE_API_URL is configured, auto-derive the WebSocket URL
+  // If VITE_API_URL is configured separately, derive the WS URL from it
   const envApi = import.meta.env.VITE_API_URL;
   if (envApi && envApi.trim() !== '') {
     const cleanApi = envApi.trim().replace(/\/+$/, '');
@@ -33,7 +35,7 @@ export const getWsUrl = () => {
     return `${wsProto}${hostAndPath}/ws`;
   }
 
-  // Fallback for local Vite dev server
+  // Same-origin default: automatically connects to current server's /ws endpoint
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${protocol}//${window.location.host}/ws`;
 };
