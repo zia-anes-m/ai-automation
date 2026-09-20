@@ -7,16 +7,14 @@ import {
   History, 
   Settings, 
   Download,
-  Activity,
-  Terminal,
-  Compass,
-  Cpu
+  Cpu,
+  Loader2
 } from 'lucide-react';
 
 export default function Navbar({ 
   activeTab, 
   setActiveTab, 
-  isConnected, 
+  connectionState, // 'connected' | 'connecting' | 'disconnected'
   onOpenSettings, 
   onOpenHistory, 
   hasPlan, 
@@ -95,10 +93,15 @@ export default function Navbar({
         <div className="flex items-center gap-2">
           {/* Connection Status Badge */}
           <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-obsidian-900 border border-white/[0.06] text-[11px] font-mono">
-            {isConnected ? (
+            {connectionState === 'connected' ? (
               <>
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-sm shadow-emerald-400/50" />
                 <span className="text-slate-300">Live Stream</span>
+              </>
+            ) : connectionState === 'connecting' ? (
+              <>
+                <Loader2 className="w-3 h-3 text-amber-400 animate-spin" />
+                <span className="text-amber-400">Connecting...</span>
               </>
             ) : (
               <>

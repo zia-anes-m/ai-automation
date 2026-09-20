@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import confetti from 'canvas-confetti';
 import Navbar from './components/Navbar';
 import TaskInput from './components/TaskInput';
@@ -8,6 +8,9 @@ import SynthesizerPlanView from './components/SynthesizerPlanView';
 import ComparisonView from './components/ComparisonView';
 import HistoryModal from './components/HistoryModal';
 import SettingsModal from './components/SettingsModal';
+import { getApiUrl, getWsUrl } from './config';
+import { DEFAULT_SCENARIOS } from './data/defaultScenarios';
+import { AlertCircle, RefreshCw } from 'lucide-react';
 
 const DEFAULT_AGENTS = {
   planner: {
@@ -50,9 +53,9 @@ const DEFAULT_AGENTS = {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('pipeline');
-  const [scenarios, setScenarios] = useState([]);
-  const [selectedScenario, setSelectedScenario] = useState(null);
-  const [taskPrompt, setTaskPrompt] = useState('');
+  const [scenarios, setScenarios] = useState(DEFAULT_SCENARIOS);
+  const [selectedScenario, setSelectedScenario] = useState(DEFAULT_SCENARIOS[0]);
+  const [taskPrompt, setTaskPrompt] = useState(DEFAULT_SCENARIOS[0].prompt);
   
   const [provider, setProvider] = useState('simulation');
   const [apiKeys, setApiKeys] = useState(() => {
@@ -64,7 +67,10 @@ export default function App() {
     }
   });
 
-  const [isConnected, setIsConnected] = useState(false);
+  // Connection State: 'connecting' | 'connected' | 'disconnected'
+  const [connectionState, setConnectionState] = useState('connecting');
+  const [connectionErrorMsg, setConnectionErrorMsg] = useState(null);
+
   const [isRunning, setIsRunning] = useState(false);
   const [currentAgent, setCurrentAgent] = useState(null);
   const [currentSessionId, setCurrentSessionId] = useState(null);
@@ -84,48 +90,87 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const wsRef = useRef(null);
+  const reconnectTimeoutRef = useRef(null);
+  const retryCountRef = useRef(0);
+
+  const apiUrl = getApiUrl();
+  const wsUrl = getWsUrl();
 
   // Load scenarios and agent configs from backend
   useEffect(() => {
-    fetch('/api/scenarios')
-      .then((res) => res.json())
+    const fetchScenariosUrl = `${apiUrl}/api/scenarios`;
+    const fetchHistoryUrl = `${apiUrl}/api/history`;
+
+    console.log(`[AGENT-SYNC] Fetching scenarios from ${fetchScenariosUrl}`);
+
+    fetch(fetchScenariosUrl)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
       .then((data) => {
         if (data.scenarios && data.scenarios.length > 0) {
+          console.log(`[AGENT-SYNC] Loaded ${data.scenarios.length} scenarios from backend`);
           setScenarios(data.scenarios);
           setSelectedScenario(data.scenarios[0]);
           setTaskPrompt(data.scenarios[0].prompt);
         }
       })
-      .catch((err) => console.log('Using fallback local scenario dataset', err));
+      .catch((err) => {
+        console.warn('[AGENT-SYNC] Backend scenarios API unavailable, initialized with default benchmark scenarios:', err.message);
+      });
 
-    fetch('/api/history')
-      .then((res) => res.json())
+    fetch(fetchHistoryUrl)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
       .then((data) => {
         if (data.history) setHistoryList(data.history);
       })
-      .catch((err) => console.log(err));
-  }, []);
+      .catch((err) => {
+        console.warn('[AGENT-SYNC] History API unavailable:', err.message);
+      });
+  }, [apiUrl]);
 
-  // Initialize WebSocket connection
-  useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
+  // WebSocket Connection Management
+  const connectWebSocket = useCallback(() => {
+    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
 
-    function connect() {
+    setConnectionState('connecting');
+    console.log(`[AGENT-SYNC WS] Connecting to ${wsUrl}`);
+
+    try {
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
-        setIsConnected(true);
+        console.log(`[AGENT-SYNC WS] Successfully connected to ${wsUrl}`);
+        setConnectionState('connected');
+        setConnectionErrorMsg(null);
+        retryCountRef.current = 0;
       };
 
-      ws.onclose = () => {
-        setIsConnected(false);
-        setTimeout(connect, 3000);
+      ws.onclose = (event) => {
+        console.warn(`[AGENT-SYNC WS] Connection closed (code: ${event.code}, reason: "${event.reason || 'None'}").`);
+        setConnectionState('disconnected');
+        wsRef.current = null;
+
+        // Schedule auto-reconnect with exponential backoff (min 2.5s, max 15s)
+        const delay = Math.min(15000, Math.pow(1.5, retryCountRef.current) * 2500);
+        retryCountRef.current += 1;
+        
+        if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = setTimeout(() => {
+          connectWebSocket();
+        }, delay);
       };
 
-      ws.onerror = () => {
-        setIsConnected(false);
+      ws.onerror = (error) => {
+        console.error(`[AGENT-SYNC WS] Error connecting to ${wsUrl}:`, error);
+        setConnectionState('disconnected');
       };
 
       ws.onmessage = (event) => {
@@ -153,25 +198,38 @@ export default function App() {
               });
             } catch (e) {}
             // Update history
-            setHistoryList((prev) => [msg.summary, ...prev.filter((h) => h.sessionId !== msg.summary.sessionId)]);
+            if (msg.summary) {
+              setHistoryList((prev) => [msg.summary, ...prev.filter((h) => h.sessionId !== msg.summary.sessionId)]);
+            }
           } else if (msg.type === 'single_agent_chunk') {
             setSingleOutputChunk(msg.accumulated);
           } else if (msg.type === 'comparison_complete') {
             setIsRunningComparison(false);
             setComparisonData(msg.comparison);
+          } else if (msg.type === 'error') {
+            console.error('[AGENT-SYNC WS] Server error payload:', msg.message);
+            setConnectionErrorMsg(`Execution Error: ${msg.message}`);
+            setIsRunning(false);
+            setIsRunningComparison(false);
           }
         } catch (e) {
-          console.error('Error parsing WS message', e);
+          console.error('[AGENT-SYNC WS] Error parsing message payload:', e);
         }
       };
+    } catch (err) {
+      console.error('[AGENT-SYNC WS] Failed to initialize WebSocket:', err);
+      setConnectionState('disconnected');
     }
+  }, [wsUrl]);
 
-    connect();
+  useEffect(() => {
+    connectWebSocket();
 
     return () => {
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       if (wsRef.current) wsRef.current.close();
     };
-  }, []);
+  }, [connectWebSocket]);
 
   const handleSelectScenario = (sc) => {
     setSelectedScenario(sc);
@@ -187,6 +245,12 @@ export default function App() {
   const handleStartExecution = () => {
     if (!taskPrompt.trim() || isRunning) return;
 
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      setConnectionErrorMsg(`Backend server is currently offline or unreachable at ${wsUrl}. Please ensure your backend is deployed and VITE_WS_URL is set.`);
+      return;
+    }
+
+    setConnectionErrorMsg(null);
     const newSessionId = `session_${Date.now()}`;
     setCurrentSessionId(newSessionId);
     setIsRunning(true);
@@ -198,7 +262,7 @@ export default function App() {
 
     const activeKey = provider === 'anthropic' ? apiKeys.anthropic : provider === 'gemini' ? apiKeys.gemini : apiKeys.openai;
 
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+    try {
       wsRef.current.send(JSON.stringify({
         type: 'start_task',
         sessionId: newSessionId,
@@ -206,11 +270,15 @@ export default function App() {
         provider,
         apiKey: activeKey
       }));
+    } catch (err) {
+      console.error('[AGENT-SYNC] Failed to send start_task message:', err);
+      setIsRunning(false);
+      setConnectionErrorMsg('Failed to send task to backend.');
     }
   };
 
   const handleAbortExecution = () => {
-    if (wsRef.current && currentSessionId) {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && currentSessionId) {
       wsRef.current.send(JSON.stringify({
         type: 'abort_task',
         sessionId: currentSessionId
@@ -221,12 +289,18 @@ export default function App() {
   };
 
   const handleRunComparison = () => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      setConnectionErrorMsg(`Backend server is currently offline or unreachable at ${wsUrl}.`);
+      return;
+    }
+
+    setConnectionErrorMsg(null);
     setIsRunningComparison(true);
     setSingleOutputChunk('');
 
     const activeKey = provider === 'anthropic' ? apiKeys.anthropic : provider === 'gemini' ? apiKeys.gemini : apiKeys.openai;
 
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+    try {
       wsRef.current.send(JSON.stringify({
         type: 'run_comparison',
         sessionId: currentSessionId || `session_${Date.now()}`,
@@ -234,6 +308,10 @@ export default function App() {
         provider,
         apiKey: activeKey
       }));
+    } catch (err) {
+      console.error('[AGENT-SYNC] Failed to send run_comparison message:', err);
+      setIsRunningComparison(false);
+      setConnectionErrorMsg('Failed to run comparison on backend.');
     }
   };
 
@@ -271,12 +349,33 @@ export default function App() {
         <Navbar
           activeTab={activeTab}
           setActiveTab={setActiveTab}
-          isConnected={isConnected}
+          connectionState={connectionState}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onOpenHistory={() => setIsHistoryOpen(true)}
           hasPlan={!!outputs.synthesizer}
           onExport={handleExportPlan}
         />
+
+        {/* Offline / Connection Error Banner */}
+        {connectionErrorMsg && (
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+            <div className="p-3.5 rounded-xl bg-rose-950/40 border border-rose-500/30 text-rose-200 text-xs flex items-center justify-between gap-3 shadow-md">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-400 flex-shrink-0" />
+                <span>{connectionErrorMsg}</span>
+              </div>
+              <button
+                onClick={() => {
+                  setConnectionErrorMsg(null);
+                  connectWebSocket();
+                }}
+                className="px-2.5 py-1 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 font-medium text-[11px] flex items-center gap-1 transition-all flex-shrink-0"
+              >
+                <RefreshCw className="w-3 h-3" /> Retry Connection
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Studio Task Orchestration Deck */}
         <TaskInput

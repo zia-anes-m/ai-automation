@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: agent-sync-backend
+    env: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20.x
+      - key: CORS_ORIGIN
+        value: https://autonomous-ai-agents.vercel.app,http://localhost:5173

@@ -15,8 +15,34 @@ const wss = new WebSocketServer({ server, path: "/ws" });
 
 const PORT = process.env.PORT || 5000;
 
-// Enable CORS and JSON parsing
-app.use(cors({ origin: "*" }));
+// Dynamic CORS Configuration
+const allowedOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(",").map((s) => s.trim())
+  : [
+      "https://autonomous-ai-agents.vercel.app",
+      "http://localhost:5173",
+      "http://localhost:3000",
+      "http://localhost:5000"
+    ];
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (e.g. mobile apps, curl, server-to-server)
+      if (!origin || allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        // Log rejected origins for diagnostic visibility
+        console.warn(`[CORS] Request from origin ${origin} accepted under permissive fallback.`);
+        callback(null, true);
+      }
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"]
+  })
+);
+
 app.use(express.json());
 
 // In-memory session store
@@ -35,9 +61,17 @@ function broadcastSessionEvent(sessionId, event) {
   });
 }
 
-// WebSocket connection handling
-wss.on("connection", (ws) => {
+// WebSocket connection handling & heartbeat
+wss.on("connection", (ws, req) => {
+  const clientIp = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+  console.log(`[WS] New client connected from ${clientIp}`);
+
+  ws.isAlive = true;
   ws.activeSessionId = null;
+
+  ws.on("pong", () => {
+    ws.isAlive = true;
+  });
 
   ws.on("message", async (rawMessage) => {
     try {
@@ -49,12 +83,13 @@ wss.on("connection", (ws) => {
       } else if (data.type === "start_task") {
         const sessionId = data.sessionId || `session_${Date.now()}`;
         ws.activeSessionId = sessionId;
+        console.log(`[TASK] Initiating 4-Agent Pipeline for session: ${sessionId} (Engine: ${data.provider || 'simulation'})`);
 
         const session = new OrchestrationSession({
           sessionId,
           taskPrompt: data.taskPrompt,
           provider: data.provider || "simulation",
-          apiKey: data.apiKey || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY || null,
+          apiKey: data.apiKey || process.env.ANTHROPIC_API_KEY || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY || null,
           emitEvent: (event) => broadcastSessionEvent(sessionId, event)
         });
 
@@ -68,6 +103,7 @@ wss.on("connection", (ws) => {
         }
       } else if (data.type === "run_comparison") {
         const sessionId = data.sessionId;
+        console.log(`[BENCHMARK] Running side-by-side comparison for session: ${sessionId}`);
         let session = sessions.get(sessionId);
         if (!session) {
           session = new OrchestrationSession({
@@ -81,25 +117,70 @@ wss.on("connection", (ws) => {
         }
         await session.runSingleAgentComparison();
       } else if (data.type === "abort_task") {
+        console.log(`[TASK] Aborting session: ${data.sessionId}`);
         const session = sessions.get(data.sessionId);
         if (session) {
           session.abort();
         }
       }
     } catch (err) {
+      console.error("[WS] Error processing client message:", err.message);
       ws.send(JSON.stringify({ type: "error", message: err.message }));
     }
   });
 
-  ws.send(JSON.stringify({ type: "connected", message: "AGENT-SYNC WebSocket Connected" }));
+  ws.on("close", (code, reason) => {
+    console.log(`[WS] Client disconnected (code: ${code}, reason: "${reason.toString() || 'Normal closure'}")`);
+  });
+
+  ws.on("error", (err) => {
+    console.error("[WS] Client connection error:", err.message);
+  });
+
+  // Initial welcome message
+  ws.send(JSON.stringify({ 
+    type: "connected", 
+    message: "AGENT-SYNC Multi-Agent Server Connected",
+    timestamp: new Date().toISOString()
+  }));
+});
+
+// Periodic heartbeat to prevent cloud load balancer timeouts (every 30s)
+const interval = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) return ws.terminate();
+    ws.isAlive = false;
+    ws.ping();
+  });
+}, 30000);
+
+wss.on("close", () => {
+  clearInterval(interval);
 });
 
 // REST API Endpoints
+app.get("/", (req, res) => {
+  res.json({
+    status: "online",
+    service: "AGENT-SYNC Multi-Agent Platform Server",
+    version: "2.4.0",
+    websocket: "/ws",
+    endpoints: {
+      health: "/api/health",
+      scenarios: "/api/scenarios",
+      agents: "/api/agents",
+      history: "/api/history"
+    }
+  });
+});
+
 app.get("/api/health", (req, res) => {
   res.json({
     status: "online",
     service: "AGENT-SYNC Multi-Agent Platform",
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    activeSessions: sessions.size,
+    connectedClients: wss.clients.size
   });
 });
 
@@ -171,6 +252,6 @@ app.get("/api/export/:sessionId", (req, res) => {
 
 // Start Server
 server.listen(PORT, () => {
-  console.log(`🚀 AGENT-SYNC Orchestration Server running on http://localhost:${PORT}`);
+  console.log(`🚀 AGENT-SYNC Orchestration Server running on port ${PORT}`);
   console.log(`📡 WebSocket endpoint live at ws://localhost:${PORT}/ws`);
 });
